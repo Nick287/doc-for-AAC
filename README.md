@@ -111,48 +111,149 @@ async def twin_patch_handler(patch):
         print ( "Unexpected error in twin_patch_handler: %s" % ex )
 ```
 
-### Input to model
+### Inference Procedure
 
-Resized image (1x3x416x416) Original image size (1x2) which is [image.size[1], image.size[0]]
+After the download of the AI model the next step is to use the model on the Edge device, we can dynamic loading and *Object Detection* on Edge devices. 
+The fllow code can help us use the TensorFlow AI model do *Object Detection* on Edge device.
 
-### Output of model
-
-The model has 3 outputs. boxes: (1x'n_candidates'x4), the coordinates of all anchor boxes, scores: (1x80x'n_candidates'), the scores of all anchor boxes per class, indices: ('nbox'x3), selected indices from the boxes tensor. The selected index format is (batch_index, class_index, box_index). The class list is [here](https://github.com/qqwweee/keras-yolo3/blob/master/model_data/coco_classes.txt)
-
-### Preprocessing steps
+1. Dynamic load TensorFlow flite AI MODEL.
+2. Image standardization.
+3. Object detection
+4. Detection scores for the result
 
 ```python
-import numpy as np
-from PIL import Image
+class InferenceProcedure():
+    
+    def detect_object(self, imgBytes):
 
-# this function is from yolo3.utils.letterbox_image
-def letterbox_image(image, size):
-    '''resize image with unchanged aspect ratio using padding'''
-    iw, ih = image.size
-    w, h = size
-    scale = min(w/iw, h/ih)
-    nw = int(iw*scale)
-    nh = int(ih*scale)
+        results = []
+        try:
+            model_full_path = AI_Model_Path.Get_Model_Path()
+            if(model_full_path == ""):
+                raise Exception ("PLEASE SET AI MODEL FIRST")
+            if '.tflite' in model_full_path:
+                interpreter = tf.lite.Interpreter(model_path=model_full_path)
+                interpreter.allocate_tensors()
+                input_details = interpreter.get_input_details()
+                output_details = interpreter.get_output_details()
+                input_shape = input_details[0]['shape']
 
-    image = image.resize((nw,nh), Image.BICUBIC)
-    new_image = Image.new('RGB', size, (128,128,128))
-    new_image.paste(image, ((w-nw)//2, (h-nh)//2))
-    return new_image
+                # bytes to numpy.ndarray
+                im_arr = np.frombuffer(imgBytes, dtype=np.uint8)
+                img = cv2.imdecode(im_arr, flags=cv2.IMREAD_COLOR)
+                im_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                im_rgb = cv2.resize(im_rgb, (input_shape[1], input_shape[2]))
+                input_data = np.expand_dims(im_rgb, axis=0)
 
-def preprocess(img):
-    model_image_size = (416, 416)
-    boxed_image = letterbox_image(img, tuple(reversed(model_image_size)))
-    image_data = np.array(boxed_image, dtype='float32')
-    image_data /= 255.
-    image_data = np.transpose(image_data, [2, 0, 1])
-    image_data = np.expand_dims(image_data, 0)
-    return image_data
+                interpreter.set_tensor(input_details[0]['index'], input_data)
+                interpreter.invoke()
+                output_data = interpreter.get_tensor(output_details[0]['index'])
+                detection_boxes = interpreter.get_tensor(output_details[0]['index'])
+                detection_classes = interpreter.get_tensor(output_details[1]['index'])
+                detection_scores = interpreter.get_tensor(output_details[2]['index'])
+                num_boxes = interpreter.get_tensor(output_details[3]['index'])
 
-image = Image.open(img_path)
-# input
-image_data = preprocess(image)
-image_size = np.array([image.size[1], image.size[0]], dtype=np.float32).reshape(1, 2)
+                label_names = [line.rstrip('\n') for line in open(AI_Model_Path.Get_Labelmap_Path())]
+                label_names = np.array(label_names)
+                new_label_names = list(filter(lambda x : x != '???', label_names))
+
+                for i in range(int(num_boxes[0])):
+                    if detection_scores[0, i] > .5:
+                        class_id = int(detection_classes[0, i])
+                        class_name = new_label_names[class_id]
+                        # top,	left,	bottom,	right
+                        results_json = "{'Class': '%s','Score': '%s','Location': '%s'}" % (class_name, detection_scores[0, i],detection_boxes[0, i])
+                        results.append(results_json)
+                        print(results_json)
+        except Exception as e:
+            print ( "detect_object unexpected error %s " % e )
+            raise
+
+        # return results
+        return json.dumps(results)
 ```
+
+For the ONNX version the process steps are exactly the same, here is the sample code for ONNX, the only difference is how to handling scores result, because the Labelmap and model output parameters are different.
+
+```python
+class InferenceProcedure():
+
+    def letterbox_image(self, image, size):
+        '''resize image with unchanged aspect ratio using padding'''
+        iw, ih = image.size
+        w, h = size
+        scale = min(w/iw, h/ih)
+        nw = int(iw*scale)
+        nh = int(ih*scale)
+
+        image = image.resize((nw,nh), Image.BICUBIC)
+        new_image = Image.new('RGB', size, (128,128,128))
+        new_image.paste(image, ((w-nw)//2, (h-nh)//2))
+        return new_image
+
+    def preprocess(self, img):
+        model_image_size = (416, 416)
+        boxed_image = self.letterbox_image(img, tuple(reversed(model_image_size)))
+        image_data = np.array(boxed_image, dtype='float32')
+        image_data /= 255.
+        image_data = np.transpose(image_data, [2, 0, 1])
+        image_data = np.expand_dims(image_data, 0)
+        return image_data
+
+    def detect_object(self, imgBytes):
+        results = []
+        try:
+            model_full_path = AI_Model_Path.Get_Model_Path()
+            if(model_full_path == ""):
+                raise Exception ("PLEASE SET AI MODEL FIRST")
+            if '.onnx' in model_full_path:
+
+                # input
+                image_data = self.preprocess(imgBytes)
+                image_size = np.array([imgBytes.size[1], imgBytes.size[0]], dtype=np.float32).reshape(1, 2)
+
+                labels_file = open(AI_Model_Path.Get_Labelmap_Path())
+                labels = labels_file.read().split("\n")
+
+                # Loading ONNX model
+                print("loading Tiny YOLO...")
+                start_time = time.time()
+                sess = rt.InferenceSession(model_full_path)
+                print("loaded after", time.time() - start_time, "s")
+
+                input_name00 = sess.get_inputs()[0].name
+                input_name01 = sess.get_inputs()[1].name
+                pred = sess.run(None, {input_name00: image_data,input_name01:image_size})
+ 
+                boxes = pred[0]
+                scores = pred[1]
+                indices = pred[2]
+
+                results = []
+                out_boxes, out_scores, out_classes = [], [], []
+                for idx_ in indices[0]:
+                    out_classes.append(idx_[1])
+                    out_scores.append(scores[tuple(idx_)])
+                    idx_1 = (idx_[0], idx_[2])
+                    out_boxes.append(boxes[idx_1])
+                    results_json = "{'Class': '%s','Score': '%s','Location': '%s'}" % (labels[idx_[1]], scores[tuple(idx_)],boxes[idx_1])
+                    results.append(results_json)
+                    print(results_json)
+
+        except Exception as e:
+            print ( "detect_object unexpected error %s " % e )
+            raise
+
+        # return results
+        return json.dumps(results)
+```
+
+Well if your IoT Edge Device incorporates the above code and features, then congratulations, your Edge device has AI image object detection capability and supports dynamic updating of AI models.
+So next, if you want the Edge module to be able to provide AI ablity to other applications or modules as Web API then you can create a Web API in your module. 
+
+Flask framework, for example, allows you to build an API quickly. You can receive images as binary then use AI model for detection, and return results in json format.
+
+Lean more about Flask: [Flask Tutorial in Visual Studio Code](https://code.visualstudio.com/docs/python/tutorial-flask)
 
 ## Reference
 

@@ -30,7 +30,10 @@ Open Neural Network Exchange (ONNX) is an open standard format for representing 
 3. In this case you can use model of [Object Detection & Image Segmentation - Tiny YOLOv3](https://github.com/onnx/models/tree/master/vision/object_detection_segmentation/tiny-yolov3)
 
 
-The dynamically loaded AI model base on the features of IoT Edge module Twin, the architecture please refer below and work steps:
+The ONNX community provides tools to assist with creating and deploying your next deep learning model. Use the information below to select the tool that is right for your project.
+![image](image/ONNXFrameworksConverters.png)
+
+### The dynamically loaded AI model base on the features of IoT Edge module Twin, the architecture please refer below and work steps:
 
 1. Upload Pre-Trained AI Models to public blob storage (Or any other Web service, just for the Edge Module can access this resource and download to Edge device later)
 2. The IoT Hub will sync device module twins automatically with AI Models information, the sync will be done even if IoT Edge offline for some time.
